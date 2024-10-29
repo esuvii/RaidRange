@@ -15,7 +15,7 @@ RaidRangeFrame.loaded = false -- flag for if saved state is ready
 RaidRangeFrame.active = false -- start inactive
 RaidRangeFrame.hooked = false -- is secure script hooked?
 RaidRangeFrame.players = {} -- dictionary of player names -> true/false in range
-RaidRangeFrame.counter = {} -- dictionary of unit IDs -> frames since last range check
+--RaidRangeFrame.counter = {} -- dictionary of unit IDs -> frames since last range check
 RaidRangeFrame.names = {} -- dictionary of unit IDs -> player names
 RaidRangeFrame.class = {} -- dictionary of names -> classes
 
@@ -181,9 +181,11 @@ local function SlashCommandHandler(msg)
 						end
 					end
 					if valid then
-						RaidRangeFrame.range = tonumber(msg)
-						RaidRangeSettings.range = RaidRangeFrame.range
-						SetActionSlot(RaidRangeFrame.slot, RaidRangeFrame.range)
+						if tonumber(msg) ~= RaidRangeFrame.range then
+							RaidRangeFrame.range = tonumber(msg)
+							RaidRangeSettings.range = RaidRangeFrame.range
+							SetActionSlot(RaidRangeFrame.slot, RaidRangeFrame.range)
+						end
 						RaidRangeUI:Refresh()
 						if not RaidRangeFrame.active then
 							RaidRangeFrame.active = true
@@ -363,6 +365,7 @@ function RaidRangeUI:Refresh()
 end
 
 
+-- ON EVENT STUFF
 RaidRangeFrame:SetScript("OnEvent", function(self, event, ...)
 	if event == "ADDON_LOADED" then
 		local args = ...
@@ -435,53 +438,61 @@ end)
 
 
 
--- HOOK SECURE FUNCTION
--- We use the CompactUnitFrame_UpdateInRange function
--- its purpose is to check within 40 yards to fade raid frames
--- it's already scanning raid every frame so may as well use it
--- credit to Ketho17's RaidFadeMore addon for the idea to hook this function
+-- ON UPDATE HOOK
 if not RaidRangeFrame.hooked then
-	hooksecurefunc("CompactUnitFrame_UpdateInRange", function(frame)
-		local group = {
-		   part = true, -- party, only check char 1 to 4
-		   raid = true,
-		}
-
+	local counter = 0
+	local playerName = UnitName("player")
+	RaidRangeFrame:HookScript("OnUpdate", function(self,elapsed)
 		if RaidRangeFrame.active then
-			if RaidRangeFrame.counter[frame.displayedUnit] then
-				RaidRangeFrame.counter[frame.displayedUnit] = RaidRangeFrame.counter[frame.displayedUnit] + 1
-				 
-				 -- each unit is checked only ever RaidRangeFrame.rate frames
-				if RaidRangeFrame.counter[frame.displayedUnit] >= RaidRangeFrame.rate then
-				    RaidRangeFrame.counter[frame.displayedUnit] = 0
-				    
-				    if not frame or not frame.optionTable or not frame.optionTable.fadeOutOfRange then return end
-				    if not group[strsub(frame.displayedUnit, 1, 4)] then return end -- ignore player, nameplates
-
-				    local check = IsActionInRange(RaidRangeFrame.slot, frame.displayedUnit)
-				    local name = RaidRangeFrame.names[frame.displayedUnit] or UnitName(frame.displayedUnit)
-
-				    if RaidRangeFrame.players[name] and RaidRangeFrame.players[name] == check then
-				    	-- do nothing, the player's range didnt change
-				    else
-				    	-- player move in/out of range since last check
-				    	RaidRangeFrame.players[name] = check
-				    	RaidRangeUI:Refresh()
-				    end
-				    
+			counter = counter + 1
+			if counter >= RaidRangeFrame.rate then
+				counter = 0
+				local changed = false
+				local name = nil
+				local check = nil
+				if IsInRaid() then
+					for i=1,40 do
+						check = nil
+						check = IsActionInRange(RaidRangeFrame.slot, "raid"..i)
+						name = RaidRangeFrame.names["raid"..i] or UnitName("raid"..i) or nil
+						if not (name == nil) and not (check == nil) and name ~= playerName then
+							if RaidRangeFrame.players[name] and RaidRangeFrame.players[name] == check then
+						    	-- do nothing, the player's range didnt change
+						    else
+						    	-- player move in/out of range since last check
+						    	RaidRangeFrame.players[name] = check
+						    	changed = true
+						    end
+						end
+					end
+				elseif IsInGroup() then
+					for i=1,4 do
+						check = nil
+						check = IsActionInRange(RaidRangeFrame.slot, "party"..i)
+						name = RaidRangeFrame.names["party"..i] or UnitName("party"..i) or nil
+						if not (name == nil) and not (check == nil) and name ~= playerName then
+							if RaidRangeFrame.players[name] and RaidRangeFrame.players[name] == check then
+						    	-- do nothing, the player's range didnt change
+						    else
+						    	-- player move in/out of range since last check
+						    	RaidRangeFrame.players[name] = check
+						    	changed = true
+						    end
+						end
+					end
 				end
-		    else
-		    	RaidRangeFrame.counter[frame.displayedUnit] = 0
-		    end
-	  	end 
+
+				if changed then
+					RaidRangeUI:Refresh()
+				end
+			end
+		end
 	end)
 	RaidRangeFrame.hooked = true
 end
 
 
-
-
-
+-- SLIDER FRAME FOR SETTING RATE
 local RaidRangeRate = CreateFrame("frame", "RaidRangeRateFrame", UIParent, "UIPanelDialogTemplate")
 RaidRangeRate.name = "RaidRangeRateFrame"
 _G[RaidRangeRate.name.."Close"]:ClearAllPoints()

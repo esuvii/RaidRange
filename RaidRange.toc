@@ -4,6 +4,6 @@
 ## SavedVariablesPerCharacter: RaidRangeActionSlot
 ## Notes: Track nearby raid members with /rr
 ## Author: esuvii
-## Version: 1.0
+## Version: 1.1
 
 Raidrange.lua
