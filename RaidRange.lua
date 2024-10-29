@@ -6,7 +6,7 @@ SLASH_RAIDRANGE2 = "/raidrange" -- slash command
 
 
 -- frame for event handler/global functions
-RaidRangeFrame = CreateFrame("Frame", "RaidRangeFrame")
+local RaidRangeFrame = CreateFrame("Frame", "RaidRangeFrame")
 RaidRangeFrame:RegisterEvent("ADDON_LOADED")
 RaidRangeFrame:RegisterEvent("PLAYER_LOGOUT")
 RaidRangeFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
@@ -18,6 +18,8 @@ RaidRangeFrame.players = {} -- dictionary of player names -> true/false in range
 --RaidRangeFrame.counter = {} -- dictionary of unit IDs -> frames since last range check
 RaidRangeFrame.names = {} -- dictionary of unit IDs -> player names
 RaidRangeFrame.class = {} -- dictionary of names -> classes
+local counter = 0 -- frames since last scan
+local changed = true -- did the players in range change
 
 -- defaults
 local defaultSlot = nil
@@ -127,7 +129,7 @@ function RaidRangeFrame:ChooseActionSlot()
 			valid = true
 			SetActionSlot(i, RaidRangeFrame.range)
 			RaidRangeFrame.slot = i -- store the new actionbar slot
-			RaidRangeActionSlot.slot = RaidRangeFrame.slot
+			RaidRangeCharacter.slot = RaidRangeFrame.slot
 			break
 		end
 	end
@@ -139,7 +141,7 @@ end
 
 local function ClearActionSlot()
 	RaidRangeFrame.slot = nil
-	RaidRangeActionSlot.slot = RaidRangeFrame.slot
+	RaidRangeCharacter.slot = RaidRangeFrame.slot
 end
 
 
@@ -160,7 +162,8 @@ local function SlashCommandHandler(msg)
 				if RaidRangeFrame.active then
 					RaidRangeFrame.active = false
 					RaidRangeUI:Invisible()
-					RaidRangeFrame.counter = {}
+					counter = 0
+					changed = true
 				else
 					RaidRangeFrame.active = true
 					RaidRangeUI:Visible()
@@ -183,7 +186,7 @@ local function SlashCommandHandler(msg)
 					if valid then
 						if tonumber(msg) ~= RaidRangeFrame.range then
 							RaidRangeFrame.range = tonumber(msg)
-							RaidRangeSettings.range = RaidRangeFrame.range
+							RaidRangeCharacter.range = RaidRangeFrame.range
 							SetActionSlot(RaidRangeFrame.slot, RaidRangeFrame.range)
 						end
 						RaidRangeUI:Refresh()
@@ -375,15 +378,15 @@ RaidRangeFrame:SetScript("OnEvent", function(self, event, ...)
 			-- saved variables RaidRangeSettings loaded
 			if not RaidRangeSettings then
 				RaidRangeSettings = {}
-				RaidRangeSettings.range = defaultRange
 				RaidRangeSettings.rate = defaultRate
 			end
-			if not RaidRangeActionSlot then
-				RaidRangeActionSlot= {}
-				RaidRangeActionSlot.slot = defaultSlot
+			if not RaidRangeCharacter then
+				RaidRangeCharacter= {}
+				RaidRangeCharacter.slot = defaultSlot
+				RaidRangeCharacter.range = defaultRange
 			end
-			RaidRangeFrame.slot = RaidRangeActionSlot.slot or defaultSlot
-			RaidRangeFrame.range = RaidRangeSettings.range or defaultRange 
+			RaidRangeFrame.slot = RaidRangeCharacter.slot or defaultSlot
+			RaidRangeFrame.range = RaidRangeCharacter.range or defaultRange 
 			RaidRangeFrame.rate = RaidRangeSettings.rate or defaultRate 
 			RaidRangeFrame.loaded = true
 		end
@@ -392,8 +395,11 @@ RaidRangeFrame:SetScript("OnEvent", function(self, event, ...)
 		if not RaidRangeSettings then
 			RaidRangeSettings = {}
 		end
-		RaidRangeActionSlot.slot = RaidRangeFrame.slot or defaultSlot
-		RaidRangeSettings.range = RaidRangeFrame.range or defaultRange
+		if not RaidRangeCharacter then
+			RaidRangeCharacter = {}
+		end
+		RaidRangeCharacter.slot = RaidRangeFrame.slot or defaultSlot
+		RaidRangeCharacter.range = RaidRangeFrame.range or defaultRange
 		RaidRangeSettings.rate = RaidRangeFrame.rate or defaultRate
 		-- saved variables stored
 
@@ -440,14 +446,12 @@ end)
 
 -- ON UPDATE HOOK
 if not RaidRangeFrame.hooked then
-	local counter = 0
 	local playerName = UnitName("player")
 	RaidRangeFrame:HookScript("OnUpdate", function(self,elapsed)
 		if RaidRangeFrame.active then
 			counter = counter + 1
 			if counter >= RaidRangeFrame.rate then
 				counter = 0
-				local changed = false
 				local name = nil
 				local check = nil
 				if IsInRaid() then
@@ -483,6 +487,7 @@ if not RaidRangeFrame.hooked then
 				end
 
 				if changed then
+					changed = false
 					RaidRangeUI:Refresh()
 				end
 			end
