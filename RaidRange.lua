@@ -11,6 +11,8 @@ RaidRangeFrame:RegisterEvent("ADDON_LOADED")
 RaidRangeFrame:RegisterEvent("PLAYER_LOGOUT")
 RaidRangeFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
 RaidRangeFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+RaidRangeFrame:RegisterEvent("PARTY_MEMBER_DISABLE")
+RaidRangeFrame:RegisterEvent("UNIT_FLAGS")
 local addonLoaded = false -- flag for if saved state is ready
 local scannerActive = false -- start inactive
 local playersDictionary = {} -- dictionary of player names -> true/false in range
@@ -278,6 +280,44 @@ function RaidRangeUI:Refresh()
 	end
 end
 
+-- if we UnitName before a player fully loaded
+-- then it could give UNKNOWNOBJECT instead of name
+local _UNKNOWNOBJECT = UNKNOWNOBJECT
+local function retryUnknown(name, unitID)
+	if name == _UNKNOWNOBJECT then
+		-- wait and try to get the player info again
+		C_Timer.After(1, function()
+			if isRaid or isParty then
+				local newName = UnitName(unitID) or nil
+				local changeFlag = false
+				if newName then
+					if namesDictionary[unitID] == nil then
+						namesDictionary[unitID] = newName
+						changeFlag = true
+					end
+					if playersDictionary[newName] == nil then
+						playersDictionary[newName] = false
+						changeFlag = true
+					end
+					if classDictionary[newName] == nil then
+						local class = select(2,UnitClass(unitID)) or nil
+						if class then
+							classDictionary[newName] = class
+						changeFlag = true
+						end
+					end
+				end
+				if changeFlag then
+					RaidRangeUI:RefreshList()
+				end
+			end
+		end)
+		return nil
+	else
+		return name
+	end
+end
+
 
 -- ON EVENT STUFF
 RaidRangeFrame:SetScript("OnEvent", function(self, event, ...)
@@ -328,26 +368,34 @@ RaidRangeFrame:SetScript("OnEvent", function(self, event, ...)
 		else
 			isParty = IsInGroup()
 		end
+		if (not isRaid) and (not isParty) then
+			playersDictionary = {}
+		end
 
 		local dictionary = {}
 		local classes = {}
 		local name = nil
 		local class = nil
+		local unitID = nil
 		for i=1,4 do
-			name = UnitName("party"..i) or nil
+			unitID = "party"..i
+			name = UnitName(unitID) or nil
+			name = retryUnknown(name, unitID)
 			if name then
-				dictionary["party"..i] = name
-				class = select(2,UnitClass("party"..i)) or nil
+				dictionary[unitID] = name
+				class = select(2,UnitClass(unitID)) or nil
 				if class then
 					classes[name] = class
 				end
 			end
 		end
 		for i=1,40 do
-			name = UnitName("raid"..i) or nil
+			unitID = "raid"..i
+			name = UnitName(unitID) or nil
+			name = retryUnknown(name, unitID)
 			if name then
-				dictionary["raid"..i] = name
-				class = select(2,UnitClass("raid"..i)) or nil
+				dictionary[unitID] = name
+				class = select(2,UnitClass(unitID)) or nil
 				if class then
 					classes[name] = class
 				end
@@ -363,7 +411,41 @@ RaidRangeFrame:SetScript("OnEvent", function(self, event, ...)
 			end
 		end
 		RaidRangeUI:Refresh()
+	
+	elseif event == "PARTY_MEMBER_DISABLE" then
+		-- someone in party/raid logged out
+		-- we need to set their value to nil (no false negatives)
+		local args = {...} or {}
+		local changeFlag = false
+		for k,v in pairs(args) do
+			local name = namesDictionary[v] or nil
+			if name then
+				if not (playersDictionary[name] == nil) then
+					playersDictionary[name] = nil
+					changeFlag = true
+				end
+			end
+		end
+		if changeFlag then
+			RaidRangeUI:RefreshList()
+		end
+
+	elseif event == "UNIT_FLAGS" then
+		-- detect if someone died
+		local args = ... or nil
+		local changeFlag = false
+		local name = namesDictionary[args] or nil
+		if name and not (playersDictionary[name] == nil) then
+			if UnitIsDead(args) then
+				playersDictionary[name] = nil
+				changeFlag = true
+			end
+		end
+		if changeFlag then
+			RaidRangeUI:RefreshList()
+		end
 	end
+
 end)
 
 
