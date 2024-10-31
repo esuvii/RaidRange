@@ -11,13 +11,15 @@ RaidRangeFrame:RegisterEvent("ADDON_LOADED")
 RaidRangeFrame:RegisterEvent("PLAYER_LOGOUT")
 RaidRangeFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
 RaidRangeFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
-RaidRangeFrame.loaded = false -- flag for if saved state is ready
-RaidRangeFrame.active = false -- start inactive
-RaidRangeFrame.hooked = false -- is secure script hooked?
-RaidRangeFrame.players = {} -- dictionary of player names -> true/false in range
---RaidRangeFrame.counter = {} -- dictionary of unit IDs -> frames since last range check
-RaidRangeFrame.names = {} -- dictionary of unit IDs -> player names
-RaidRangeFrame.class = {} -- dictionary of names -> classes
+local addonLoaded = false -- flag for if saved state is ready
+local scannerActive = false -- start inactive
+local playersDictionary = {} -- dictionary of player names -> true/false in range
+local namesDictionary = {} -- dictionary of unit IDs -> player names
+local classDictionary = {} -- dictionary of names -> classes
+local numGroupMembers = 0 -- number of group members
+local isRaid = false -- in a raid?
+local isParty = false -- in a party?
+local playerName = UnitName("player") -- player name
 local counter = 0 -- frames since last scan
 local changed = true -- did the players in range change
 
@@ -25,34 +27,39 @@ local changed = true -- did the players in range change
 local defaultSlot = nil
 local defaultRange = 10
 local defaultRate = 60
-RaidRangeFrame.slot = defaultSlot
-RaidRangeFrame.range = defaultRange 
-RaidRangeFrame.rate = defaultRate 
+local defaultInverse = false
+local selectedSlot = defaultSlot
+local selectedRange = defaultRange 
+local selectedRate = defaultRate
+local selectedInverse = defaultInverse
 
 
 -- range data
-RaidRangeFrame.ranges = {5, 10, 15, 20}
-RaidRangeFrame.data = {}
-RaidRangeFrame.data[5] = {
+local rangeData = {}
+rangeData[5] = {
 	["name"] = "Unbestowed Friendship Bracelet",
 	["id"] = 22259,
 	["texture"] = 133345
 }
-RaidRangeFrame.data[10] = {
+rangeData[10] = {
 	["name"] = "Toasting Goblet",
 	["id"] = 21267,
 	["texture"] = 132789
 }
-RaidRangeFrame.data[15] = {
+rangeData[15] = {
 	["name"] = "Crystal Infused Bandage",
 	["id"] = 23684,
 	["texture"] = 133686
 }
-RaidRangeFrame.data[20] = {
+rangeData[20] = {
 	["name"] = "Juju Guile",
 	["id"] = 12458,
 	["texture"] = 134315
 }
+local knownRanges = {}
+for k,v in pairs(rangeData) do
+	table.insert(knownRanges,k)
+end
 
 -- class colors
 local classColor = {
@@ -96,7 +103,7 @@ end
 
 local function SetActionSlot(slot, range)
 	local valid = false
-	for k,v in pairs(RaidRangeFrame.ranges) do
+	for k,v in pairs(knownRanges) do
 		if v == tonumber(range) then
 			valid = true
 			break
@@ -106,7 +113,7 @@ local function SetActionSlot(slot, range)
 		if slot >=1 and slot <=120 then
 			if not InCombatLockdown() then
 				ClearCursor()
-				PickupItem(RaidRangeFrame.data[range].id)
+				PickupItem(rangeData[range].id)
 				PlaceAction(slot)
 				ClearCursor()
 			else
@@ -127,9 +134,9 @@ function RaidRangeFrame:ChooseActionSlot()
 		local text = GetActionText(i)
 		if text and text == macroName then
 			valid = true
-			SetActionSlot(i, RaidRangeFrame.range)
-			RaidRangeFrame.slot = i -- store the new actionbar slot
-			RaidRangeCharacter.slot = RaidRangeFrame.slot
+			SetActionSlot(i, selectedRange)
+			selectedSlot = i -- store the new actionbar slot
+			RaidRangeCharacter.slot = selectedSlot
 			break
 		end
 	end
@@ -138,123 +145,6 @@ function RaidRangeFrame:ChooseActionSlot()
 	end
 end
 
-
-local function ClearActionSlot()
-	RaidRangeFrame.slot = nil
-	RaidRangeCharacter.slot = RaidRangeFrame.slot
-end
-
-
--- SLASH COMMAND FUNCTIONS
--- /rr /raidrange = toggle display and range tracking
--- /rr N = show and set range value to N
--- /rr clear = unbind the saved action slot
--- /rr update  /rr rate = show rate slider
--- /rr macro generates a new setup macro
--- /rr help = print this list of command and the current settings
-
-local function SlashCommandHandler(msg) 
-	if RaidRangeFrame.loaded and RaidRangeFrame.hooked then
-		-- "/rr" or "/raidrange" (no flags)
-		-- toggle the UI visibility and hook script
-		if msg == "" or msg == nil then
-			if RaidRangeFrame.slot then
-				if RaidRangeFrame.active then
-					RaidRangeFrame.active = false
-					RaidRangeUI:Invisible()
-					counter = 0
-					changed = true
-				else
-					RaidRangeFrame.active = true
-					RaidRangeUI:Visible()
-				end
-			else
-				print("Please set an action bar slot. Open your character specific macros, place the \"_RaidRange\" macro onto your bars, and then click it.")
-			end
-
-			-- "/rr N" show and set range value to N (if possible)
-		elseif tonumber(msg) then
-			if RaidRangeFrame.slot then
-				if not InCombatLockdown() then
-					local valid = false
-					for k,v in pairs(RaidRangeFrame.ranges) do
-						if v == tonumber(msg) then
-							valid = true
-							break
-						end
-					end
-					if valid then
-						if tonumber(msg) ~= RaidRangeFrame.range then
-							RaidRangeFrame.range = tonumber(msg)
-							RaidRangeCharacter.range = RaidRangeFrame.range
-							SetActionSlot(RaidRangeFrame.slot, RaidRangeFrame.range)
-						end
-						RaidRangeUI:Refresh()
-						if not RaidRangeFrame.active then
-							RaidRangeFrame.active = true
-							RaidRangeUI.Visible()
-						end
-					else
-						local text = "Supported range values are:"
-						for k,v in pairs(RaidRangeFrame.ranges) do
-							text = text .. " " .. v
-						end
-						print(text)
-					end
-				else
-					print("Cannot adjust range value in combat.")
-				end
-
-			else
-				print("Please set an action bar slot. Open your character specific macros, place the \"_RaidRange\" macro onto your bars, and then click it.")
-			end
-
-			-- "/rr clear" unset the action slot
-		elseif msg == "clear" then
-			ClearActionSlot()
-			print("RaidRange action bar slot reset, to reactivate use the \"_RaidRange\" macro.")
-
-			--"/rr macro" generates a new setup macro
-		elseif msg == "macro" then
-			GenerateMacro()
-
-			-- "/rr update" or "/rr rate" show the rate slider
-		elseif msg == "update" or msg == "rate" then
-			RaidRangeFrame.active = false
-			RaidRangeUI:Invisible()
-			_G["RaidRangeRateFrame"]:Show()
-
-			-- "/rr help" show available commands and current settings
-		elseif msg == "help" or msg == "h" or msg == "usage" or msg == "-help" or msg == "-h" or msg == "-usage" or msg == "--help" then
-			local text = "RaidRange:\n"
-			if RaidRangeFrame.slot then
-				text = text.."  Action Bar Slot: "..RaidRangeFrame.slot.."\n"
-			else
-				text = text.."  Action Bar Slot: NOT SET - Open your character specific macros, place the \"_RaidRange\" macro onto your bars, and then click it.\n"
-			end
-			text = text.."  Range: "..RaidRangeFrame.range.."   ||"
-			text = text.."  Updating every "..RaidRangeFrame.rate.." frames\n"
-			text = text.."/rr    toggle range tracker\n"
-			text = text.."/rr N   track players within N yds ("
-			for k,v in pairs(RaidRangeFrame.ranges) do
-				text = text..v.." "
-			end
-			text = text:sub(1,-2)
-			text = text..")\n"
-			text = text.."/rr rate   set how often to scan for players; lower is faster but at a greater performance cost.\n"
-			text = text.."/rr clear   unsets the currently chosen action bar slot.\n"
-			text = text.."/rr macro   generates a new setup macro.\n"
-			print(text)
-
-		else
-			print("Invalid command, for usage info see: \"/rr help\"")
-		end
-
-	else
-		print("Please allow a moment for RaidRange to load.")
-	end
-end
-SlashCmdList["RAIDRANGE"] = SlashCommandHandler
 
 -- RANGE UI
 -- font string is parent
@@ -269,8 +159,8 @@ RaidRangeUI:SetPoint("CENTER")
 RaidRangeUI.text = RaidRangeUI:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
 RaidRangeUI.text:SetPoint("CENTER")
 RaidRangeUI.text:SetTextScale(0.8)
-RaidRangeUI.defaultText = "          "
-RaidRangeUI.text:SetText(RaidRangeUI.defaultText) -- player list
+local defaultText = "          "
+RaidRangeUI.text:SetText(defaultText) -- player list
 RaidRangeUI:SetWidth(RaidRangeUI.text:GetWidth()+4)
 RaidRangeUI:SetHeight(RaidRangeUI.text:GetHeight()+4)
 
@@ -285,7 +175,11 @@ RaidRangeUI.bg:SetFrameLevel(1)
 RaidRangeUI.note = RaidRangeUI:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 RaidRangeUI.note:SetPoint("TOP", RaidRangeUI.text, "BOTTOMRIGHT", 2,-2)
 RaidRangeUI.note:SetTextScale(0.8)
-RaidRangeUI.note:SetText(RaidRangeFrame.range.." yds") -- distance
+if selectedInverse then
+	RaidRangeUI.note:SetText("\124cffC41E3ANOT\124r " ..selectedRange .. " yds")
+else
+	RaidRangeUI.note:SetText(selectedRange .. " yds")
+end
 
 RaidRangeUI:SetMovable(true)
 RaidRangeUI:EnableMouse(true)
@@ -298,14 +192,16 @@ RaidRangeUI:SetScript("OnDragStop", function(self)
     self:StopMovingOrSizing()
 end)
 RaidRangeUI:SetScript("OnHide", function(self)
-    RaidRangeUI.text:SetText(RaidRangeUI.defaultText)
+    RaidRangeUI.text:SetText(defaultText)
 	RaidRangeUI:SetWidth(RaidRangeUI.text:GetWidth()+4)
 	RaidRangeUI:SetHeight(RaidRangeUI.text:GetHeight()+4)
     self:StopMovingOrSizing()
 end)
 
+-- we toggle alpha/interactivity instead of show/hide
+-- since show/hide doesn't like combat lockdown
 function RaidRangeUI:Invisible()
-    RaidRangeUI.text:SetText(RaidRangeUI.defaultText)
+    RaidRangeUI.text:SetText(defaultText)
 	RaidRangeUI:SetWidth(RaidRangeUI.text:GetWidth()+4)
 	RaidRangeUI:SetHeight(RaidRangeUI.text:GetHeight()+4)
 	RaidRangeUI:SetAlpha(0)
@@ -317,10 +213,14 @@ end
 RaidRangeUI:Invisible() -- invisible on init
 
 function RaidRangeUI:Visible()
-    RaidRangeUI.text:SetText(RaidRangeUI.defaultText)
+    RaidRangeUI.text:SetText(defaultText)
 	RaidRangeUI:SetWidth(RaidRangeUI.text:GetWidth()+4)
 	RaidRangeUI:SetHeight(RaidRangeUI.text:GetHeight()+4)
-	RaidRangeUI.note:SetText(RaidRangeFrame.range .. " yds")
+	if selectedInverse then
+		RaidRangeUI.note:SetText("\124cffC41E3ANOT\124r " ..selectedRange .. " yds")
+	else
+		RaidRangeUI.note:SetText(selectedRange .. " yds")
+	end
 	RaidRangeUI:SetAlpha(1)
 	RaidRangeUI.text:SetAlpha(1)
 	RaidRangeUI.bg:SetAlpha(1)
@@ -328,9 +228,10 @@ function RaidRangeUI:Visible()
 	RaidRangeUI:EnableMouse(true)
 end
 
+-- wrap text in class color
 local function ColoredName(name)
 	local text = ""
-	local class = RaidRangeFrame.class[name] or nil
+	local class = classDictionary[name] or nil
 	if class and classColor[class] then
 		text = "\124cff" .. classColor[class] .. name .. "\124r"
 	else
@@ -339,12 +240,13 @@ local function ColoredName(name)
 	return text
 end
 
-function RaidRangeUI:Refresh()
+-- for refreshing just the range UI's player list
+function RaidRangeUI:RefreshList()
 	local text = ""
 	local num = 0
 	local excess = 0
-	for k,v in pairs(RaidRangeFrame.players) do
-		if v then
+	for k,v in pairs(playersDictionary) do
+		if v == not selectedInverse then
 			num = num + 1
 			if num > 5 then
 				excess = excess + 1
@@ -358,13 +260,22 @@ function RaidRangeUI:Refresh()
 	elseif num > 0 then
 		text = text:sub(1,-2)
 	else
-		text = RaidRangeUI.defaultText
+		text = defaultText
 	end
 	
 	RaidRangeUI.text:SetText(text)
 	RaidRangeUI:SetWidth(RaidRangeUI.text:GetWidth()+4)
 	RaidRangeUI:SetHeight(RaidRangeUI.text:GetHeight()+4)
-	RaidRangeUI.note:SetText(RaidRangeFrame.range .. " yds")
+end
+
+-- for refreshing the entire range UI
+function RaidRangeUI:Refresh()
+	RaidRangeUI:RefreshList()
+	if selectedInverse then
+		RaidRangeUI.note:SetText("\124cffC41E3ANOT\124r " ..selectedRange .. " yds")
+	else
+		RaidRangeUI.note:SetText(selectedRange .. " yds")
+	end
 end
 
 
@@ -384,11 +295,13 @@ RaidRangeFrame:SetScript("OnEvent", function(self, event, ...)
 				RaidRangeCharacter= {}
 				RaidRangeCharacter.slot = defaultSlot
 				RaidRangeCharacter.range = defaultRange
+				RaidRangeCharacter.inverse = defaultInverse
 			end
-			RaidRangeFrame.slot = RaidRangeCharacter.slot or defaultSlot
-			RaidRangeFrame.range = RaidRangeCharacter.range or defaultRange 
-			RaidRangeFrame.rate = RaidRangeSettings.rate or defaultRate 
-			RaidRangeFrame.loaded = true
+			selectedSlot = RaidRangeCharacter.slot or defaultSlot
+			selectedRange = RaidRangeCharacter.range or defaultRange 
+			selectedInverse = RaidRangeCharacter.inverse or defaultInverse
+			selectedRate = RaidRangeSettings.rate or defaultRate 
+			addonLoaded = true
 		end
 
 	elseif event == "PLAYER_LOGOUT" then
@@ -398,14 +311,24 @@ RaidRangeFrame:SetScript("OnEvent", function(self, event, ...)
 		if not RaidRangeCharacter then
 			RaidRangeCharacter = {}
 		end
-		RaidRangeCharacter.slot = RaidRangeFrame.slot or defaultSlot
-		RaidRangeCharacter.range = RaidRangeFrame.range or defaultRange
-		RaidRangeSettings.rate = RaidRangeFrame.rate or defaultRate
+		RaidRangeCharacter.slot = selectedSlot or defaultSlot
+		RaidRangeCharacter.range = selectedRange or defaultRange
+		RaidRangeCharacter.inverse = selectedInverse or defaultInverse
+		RaidRangeSettings.rate = selectedRate or defaultRate
 		-- saved variables stored
 
 	elseif event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_ENTERING_WORLD" then
 		-- Fired whenever a group or raid is formed or disbanded, players are leaving or joining the group or raid.
 		-- rebuild our dictionary of unit IDs to player names
+
+		numGroupMembers = GetNumGroupMembers()
+		isRaid = IsInRaid()
+		if isRaid then
+			isParty = false
+		else
+			isParty = IsInGroup()
+		end
+
 		local dictionary = {}
 		local classes = {}
 		local name = nil
@@ -430,12 +353,13 @@ RaidRangeFrame:SetScript("OnEvent", function(self, event, ...)
 				end
 			end
 		end
-		RaidRangeFrame.names = dictionary
-		RaidRangeFrame.class = classes
+
+		namesDictionary = dictionary
+		classDictionary = classes
 		-- need to remove players who are no longer in the group
-		for k,v in pairs(RaidRangeFrame.players) do
-			if not RaidRangeFrame.class[k] then
-				RaidRangeFrame.players[k] = false
+		for k,v in pairs(playersDictionary) do
+			if not classDictionary[k] then
+				playersDictionary[k] = false
 			end
 		end
 		RaidRangeUI:Refresh()
@@ -443,58 +367,78 @@ RaidRangeFrame:SetScript("OnEvent", function(self, event, ...)
 end)
 
 
+-- the actual range check protocol
+local _IsActionInRange = IsActionInRange
+local function rangeScan(slot, unitID, name, check, changeFlag)
+	check = nil
+	check = _IsActionInRange(slot, unitID)
+	name = namesDictionary[unitID] or UnitName(unitID) or nil
+	if not (name == nil) and not (check == nil) and name ~= playerName then
+		if playersDictionary[name] and playersDictionary[name] == check then
+	    	-- do nothing, the player's range didnt change
+	    else
+	    	-- player move in/out of range since last check
+	    	playersDictionary[name] = check
+	    	changeFlag = true
+	    end
+	end
+	return changeFlag
+end
 
--- ON UPDATE HOOK
-if not RaidRangeFrame.hooked then
-	local playerName = UnitName("player")
-	RaidRangeFrame:HookScript("OnUpdate", function(self,elapsed)
-		if RaidRangeFrame.active then
-			counter = counter + 1
-			if counter >= RaidRangeFrame.rate then
-				counter = 0
-				local name = nil
-				local check = nil
-				if IsInRaid() then
-					for i=1,40 do
-						check = nil
-						check = IsActionInRange(RaidRangeFrame.slot, "raid"..i)
-						name = RaidRangeFrame.names["raid"..i] or UnitName("raid"..i) or nil
-						if not (name == nil) and not (check == nil) and name ~= playerName then
-							if RaidRangeFrame.players[name] and RaidRangeFrame.players[name] == check then
-						    	-- do nothing, the player's range didnt change
-						    else
-						    	-- player move in/out of range since last check
-						    	RaidRangeFrame.players[name] = check
-						    	changed = true
-						    end
-						end
-					end
-				elseif IsInGroup() then
-					for i=1,4 do
-						check = nil
-						check = IsActionInRange(RaidRangeFrame.slot, "party"..i)
-						name = RaidRangeFrame.names["party"..i] or UnitName("party"..i) or nil
-						if not (name == nil) and not (check == nil) and name ~= playerName then
-							if RaidRangeFrame.players[name] and RaidRangeFrame.players[name] == check then
-						    	-- do nothing, the player's range didnt change
-						    else
-						    	-- player move in/out of range since last check
-						    	RaidRangeFrame.players[name] = check
-						    	changed = true
-						    end
-						end
-					end
-				end
 
-				if changed then
-					changed = false
-					RaidRangeUI:Refresh()
-				end
+-- TIMING ANALYSIS
+--[[
+local prevTime = nil
+local totalTime = 0
+local nPrint = 100
+local nTot = 0
+local n=0
+local runningAvg = 0
+local function timingStart()
+	prevTime = debugprofilestop()
+end
+local function timingEnd()
+	local newTime = debugprofilestop()
+	local diff = (newTime - prevTime)
+	totalTime = totalTime+diff
+	n = n + 1
+	if n >= nPrint then
+		runningAvg = ((runningAvg*nTot)+totalTime)/(nTot+n)
+		nTot = nTot + n
+		print(nTot.." scans: "..runningAvg.."ms avg")
+		n = 0
+		totalTime = 0
+	end
+end
+]]--
+
+-- ON UPDATE SCRIPT
+local function updateScript()
+	counter = counter + 1
+	if counter >= selectedRate then
+		--timingStart()
+		counter = 0
+
+		local name = nil
+		local check = nil
+		if isRaid then
+			for i=1,numGroupMembers do
+				changed = rangeScan(selectedSlot, "raid"..i, name, check, changed)
+			end
+		elseif isParty then
+			for i=1,(numGroupMembers-1) do
+				changed = rangeScan(selectedSlot, "party"..i, name, check, changed)
 			end
 		end
-	end)
-	RaidRangeFrame.hooked = true
+
+		if changed then
+			changed = false
+			RaidRangeUI:RefreshList()
+		end
+		--timingEnd()
+	end
 end
+RaidRangeFrame:SetScript("OnUpdate", nil)
 
 
 -- SLIDER FRAME FOR SETTING RATE
@@ -535,7 +479,7 @@ RaidRangeRate.slider:SetPoint("BOTTOM", RaidRangeRate, "BOTTOM", 0, 24)
 
 RaidRangeRate.current = RaidRangeRate:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 RaidRangeRate.current:SetPoint("TOP", _G[RaidRangeRate.name.."ScaleSlider"], "BOTTOM")
-RaidRangeRate.current:SetText(RaidRangeFrame.rate)
+RaidRangeRate.current:SetText(selectedRate)
 
 local function RateColor(value)
    local text = ""
@@ -552,8 +496,8 @@ local function RateColor(value)
 end
 
 RaidRangeRate:SetScript("OnShow", function(self)
-      RaidRangeRate.slider:SetValue(RaidRangeFrame.rate)
-      RaidRangeRate.current:SetText(RateColor(RaidRangeFrame.rate))
+      RaidRangeRate.slider:SetValue(selectedRate)
+      RaidRangeRate.current:SetText(RateColor(selectedRate))
 end)
 RaidRangeRate.slider:SetScript("OnValueChanged", function(self)
       local value = math.floor(self:GetValue()+0.5)
@@ -561,8 +505,147 @@ RaidRangeRate.slider:SetScript("OnValueChanged", function(self)
 end)
 RaidRangeRate:SetScript("OnHide", function(self)
       local value = math.floor(RaidRangeRate.slider:GetValue()+0.5)
-      if value and RaidRangeFrame.rate~=value then
-         RaidRangeFrame.rate = value
-         RaidRangeSettings.rate = RaidRangeFrame.rate
+      if value and selectedRate~=value then
+         selectedRate = value
+         RaidRangeSettings.rate = selectedRate
       end
 end)
+
+
+
+local function activateScanner()
+	scannerActive = true
+	RaidRangeFrame:SetScript("OnUpdate", updateScript)
+	RaidRangeUI:Visible()
+end
+
+local function deactivateScanner()
+	RaidRangeUI:Invisible()
+	RaidRangeFrame:SetScript("OnUpdate", nil)
+	scannerActive = false
+	counter = 0
+	changed = true
+end
+
+
+local function ClearActionSlot()
+	deactivateScanner()
+	selectedSlot = nil
+	RaidRangeCharacter.slot = selectedSlot
+end
+
+
+-- SLASH COMMAND FUNCTIONS
+local function SlashCommandHandler(msg) 
+	if addonLoaded then
+		-- "/rr" or "/raidrange" (no flags)
+		-- toggle the UI visibility and hook script
+		if msg == "" or msg == nil then
+			if selectedSlot then
+				if scannerActive then
+					deactivateScanner()
+				else
+					activateScanner()
+				end
+			else
+				print("Please set an action bar slot. Open your character specific macros, place the \"_RaidRange\" macro onto your bars, and then click it.")
+			end
+
+			-- "/rr N" show and set range value to N (if possible)
+		elseif tonumber(msg) then
+			if selectedSlot then
+				if not InCombatLockdown() then
+					local valid = false
+					for k,v in pairs(knownRanges) do
+						if v == tonumber(msg) then
+							valid = true
+							break
+						end
+					end
+					if valid then
+						if tonumber(msg) ~= selectedRange then
+							selectedRange = tonumber(msg)
+							RaidRangeCharacter.range = selectedRange
+							SetActionSlot(selectedSlot, selectedRange)
+						end
+						RaidRangeUI:Refresh()
+						if not scannerActive then
+							activateScanner()
+						end
+					else
+						local text = "Supported range values are:"
+						for k,v in pairs(knownRanges) do
+							text = text .. " " .. v
+						end
+						print(text)
+					end
+				else
+					print("Cannot adjust range value in combat.")
+				end
+
+			else
+				print("Please set an action bar slot. Open your character specific macros, place the \"_RaidRange\" macro onto your bars, and then click it.")
+			end
+
+			-- "/rr clear" unset the action slot
+		elseif msg == "clear" then
+			ClearActionSlot()
+			print("RaidRange action bar slot reset, to reactivate use the \"_RaidRange\" macro.")
+
+			--"/rr macro" generates a new setup macro
+		elseif msg == "macro" then
+			GenerateMacro()
+
+			-- "/rr update" or "/rr rate" show the rate slider
+		elseif msg == "update" or msg == "rate" then
+			deactivateScanner()
+			_G["RaidRangeRateFrame"]:Show()
+
+			-- "/rr inverse" or "/rr invert" toggles tracking players outside/inside the range
+		elseif msg == "inverse" or msg =="invert" or msg == "not" or msg == "inv" then
+			selectedInverse = not selectedInverse
+			RaidRangeCharacter.inverse = selectedInverse
+			RaidRangeUI:Refresh()
+			if not scannerActive then
+				activateScanner()
+			end
+
+
+			-- "/rr help" show available commands and current settings
+		elseif msg == "help" or msg == "h" or msg == "usage" or msg == "-help" or msg == "-h" or msg == "-usage" or msg == "--help" then
+			local text = "RaidRange:\n"
+			if selectedSlot then
+				text = text.."  Action Bar Slot: "..selectedSlot.."\n"
+			else
+				text = text.."  Action Bar Slot: NOT SET - Open your character specific macros, place the \"_RaidRange\" macro onto your bars, and then click it.\n"
+			end
+			if selectedInverse then
+				text = text.."  \124cffC41E3AInverse\124r Range: "..selectedRange.."   ||"
+			else
+				text = text.."  Range: "..selectedRange.."   ||"
+			end
+			text = text.."  Updating every "..selectedRate.." frames\n"
+			print(text)
+			text = "Commands:\n"
+			text = text.."/rr    toggle range tracker\n"
+			text = text.."/rr N   track players within N yds ("
+			for k,v in pairs(knownRanges) do
+				text = text..v.." "
+			end
+			text = text:sub(1,-2)
+			text = text..")\n"
+			text = text.."/rr inverse   toggles tracking players outside/inside the selected range.\n"
+			text = text.."/rr rate   set how often to scan for players; lower is faster but at a greater performance cost.\n"
+			text = text.."/rr clear   unsets the currently chosen action bar slot.\n"
+			text = text.."/rr macro   generates a new setup macro.\n"
+			print(text)
+
+		else
+			print("Invalid command, for usage info see: \"/rr help\"")
+		end
+
+	else
+		print("Please allow a moment for RaidRange to load.")
+	end
+end
+SlashCmdList["RAIDRANGE"] = SlashCommandHandler
