@@ -13,6 +13,7 @@ RaidRangeFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
 RaidRangeFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 RaidRangeFrame:RegisterEvent("PARTY_MEMBER_DISABLE")
 RaidRangeFrame:RegisterEvent("UNIT_FLAGS")
+RaidRangeFrame:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
 local addonLoaded = false -- flag for if saved state is ready
 local scannerActive = false -- start inactive
 local playersDictionary = {} -- dictionary of player names -> true/false in range
@@ -24,6 +25,7 @@ local isParty = false -- in a party?
 local playerName = UnitName("player") -- player name
 local counter = 0 -- frames since last scan
 local changed = true -- did the players in range change
+local validActionSlot = true
 
 -- defaults
 local defaultSlot = nil
@@ -144,6 +146,34 @@ function RaidRangeFrame:ChooseActionSlot()
 	end
 	if valid == false then
 		print("RaidRange expects _RaidRange macro to be on a valid action bar slot.")
+	end
+end
+
+local function validateActionSlot(slot)
+	if slot and slot == selectedSlot then
+		local slotID = select(2, GetActionInfo(slot)) or nil
+		local validID = false
+		if slotID then
+			for k,v in pairs(knownRanges) do
+				-- is it one of our valid range abilities?
+				if slotID == rangeData[v].id then
+					if tonumber(v) ~= tonumber(selectedRange) then
+						-- it is the wrong range ability!
+						print("WARNING: Selected range does not match the action button! Try \"/rr 10\" to reset this to 10 yards.")
+						validActionSlot = false
+					else
+						validActionSlot = true
+					end
+					validID = true
+					break
+				end
+			end
+		end
+		if not validID then
+			-- button doesn't match any known range ability
+			print("WARNING: RaidRange action button invalid! To stop using this slot please use \"/rr clear\"")
+			validActionSlot = false
+		end
 	end
 end
 
@@ -342,6 +372,8 @@ RaidRangeFrame:SetScript("OnEvent", function(self, event, ...)
 			selectedInverse = RaidRangeCharacter.inverse or defaultInverse
 			selectedRate = RaidRangeSettings.rate or defaultRate 
 			addonLoaded = true
+
+			C_Timer.After(1, function() validateActionSlot(selectedSlot) end)
 		end
 
 	elseif event == "PLAYER_LOGOUT" then
@@ -444,6 +476,11 @@ RaidRangeFrame:SetScript("OnEvent", function(self, event, ...)
 		if changeFlag then
 			RaidRangeUI:RefreshList()
 		end
+	
+	elseif event=="ACTIONBAR_SLOT_CHANGED" then
+		-- check if we broke the action button
+		local args = ... or nil
+		validateActionSlot(args)
 	end
 
 end)
@@ -645,7 +682,7 @@ local function SlashCommandHandler(msg)
 						end
 					end
 					if valid then
-						if tonumber(msg) ~= selectedRange then
+						if tonumber(msg) ~= selectedRange or (not validActionSlot) then
 							selectedRange = tonumber(msg)
 							RaidRangeCharacter.range = selectedRange
 							SetActionSlot(selectedSlot, selectedRange)
