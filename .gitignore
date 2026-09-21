@@ -1,1 +1,28 @@
+# Build Artifacts & Archives
 *.zip
+*.rar
+*.7z
+*.tar.gz
+
+# Operating System Files (Windows & Mac)
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# IDE and Editor Folders (Personal workspace settings)
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Temporary, Backup, and Log Files
+*.log
+*.tmp
+*.bak
+*.swp
+*~
