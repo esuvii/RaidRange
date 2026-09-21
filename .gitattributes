@@ -1,0 +1,3 @@
+# no gitignore in release
+.gitignore export-ignore
+.gitattributes export-ignore
