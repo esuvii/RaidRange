@@ -1,9 +1,9 @@
-## Interface: 11504
+## Interface: 11507
 ## Title: RaidRange
 ## SavedVariables: RaidRangeSettings
 ## SavedVariablesPerCharacter: RaidRangeCharacter
 ## Notes: Track nearby raid members with /rr
 ## Author: esuvii
-## Version: 1.5
+## Version: 1.6
 
 Raidrange.lua

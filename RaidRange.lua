@@ -82,6 +82,87 @@ local classColor = {
 	["WARRIOR"] = "C69B6D"
 }
 
+--- returns the UnitID prefix and its range
+local function groupType()
+	local prefix = nil
+	local numMembers = nil
+	if isRaid then
+		prefix = "raid"
+		numMembers = GetNumGroupMembers() or nil
+	elseif isParty then
+		prefix = "party"
+		-- does not include the player, but we don't care about self
+		numMembers = GetNumGroupMembers() -1 or nil
+	end
+	return prefix, numMembers
+end
+
+local PriorityTracker = CreateFrame("Frame")
+local UnitNameToID = {}
+local TargetMarksByName = {}
+local PriorityTrackerEventSwitch = {}
+-- Update our UnitNameToID dictionary
+PriorityTracker:RegisterEvent("GROUP_ROSTER_UPDATE")
+--- loops over raid, returns a dictionary of name->UnitID
+local function updateUnitNameToID()
+	local tempUnitNameToID = {}
+	local prefix, numMembers = groupType()
+
+	if prefix and numMembers and numMembers > 0 then
+		for i=1,numMembers do
+			local name = UnitName(prefix..i) or nil
+			if name and name ~= playerName then
+				tempUnitNameToID[name] = prefix..i
+			end
+		end
+	end
+	UnitNameToID = tempUnitNameToID
+end
+PriorityTrackerEventSwitch["GROUP_ROSTER_UPDATE"] = updateUnitNameToID
+
+-- check TargetMarksByName to see if a mark was modified
+PriorityTracker:RegisterEvent("RAID_TARGET_UPDATE")
+--- loops over known Target Marks to check if any were changed
+local function updateTargetMarksByName()
+	local tempTargetMarksByName = {}
+	for name,_ in pairs(TargetMarksByName) do
+		mark = GetRaidTargetIndex(UnitNameToID[name]) or nil
+		if mark then
+			tempTargetMarksByName[name] = mark
+		end
+	end
+	TargetMarksByName = tempTargetMarksByName
+end
+PriorityTrackerEventSwitch["RAID_TARGET_UPDATE"] = updateTargetMarksByName
+
+-- add newly marked to TargetMarksByName
+PriorityTracker:RegisterEvent("CHAT_MSG_TARGETICONS")
+--- reads CHAT_MSG_TARGETICONS payload
+--- returns icon number and target name
+local function extractMarkAndTarget(payload)
+	-- regex extract icon number + unit name
+	local pattern = "%-RaidTargetingIcon_(%d+):.- on (.-)%.$"
+	local iconNumberStr, targetName = string.match(payload, pattern)
+	if iconNumberStr then
+   		return tonumber(iconNumberStr), targetName
+  	end
+  	return nil,nil
+end
+---  reads CHAT_MSG_TARGETICONS payload and updates TargetMarksByName (if a player)
+local function addTargetMarksByName(payload)
+	local icon, name = extractMarkAndTarget(payload)
+	if name and icon and name ~= playerName then
+		-- only track group members (not enemies etc)
+		if UnitNameToID[name] then
+			TargetMarksByName[name] = icon
+		end
+	end
+end
+PriorityTrackerEventSwitch["CHAT_MSG_TARGETICONS"] = addTargetMarksByName
+
+PriorityTracker:SetScript("OnEvent", function(self, event, ...)
+	return PriorityTrackerEventSwitch[event](...) or function() return nil end
+end)
 
 -- action slot chooser macro info
 local macroName = "_RaidRange"
